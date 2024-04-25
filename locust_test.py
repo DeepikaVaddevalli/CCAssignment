@@ -1,3 +1,7 @@
+#install locust - pip install locust
+#locust -f locust_test.py
+
+
 from locust import HttpUser, TaskSet, task, between
 
 class UserBehavior(TaskSet):
