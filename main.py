@@ -1,15 +1,89 @@
 from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy import create_engine, Column, Integer, String, Date, TIMESTAMP, ForeignKey
+from sqlalchemy.orm import sessionmaker, relationship, Session, declarative_base
 from pydantic import BaseModel
 from typing import List
 from datetime import date, datetime
-from database import Session, create_tables, User, Stadium, Match, Seating, Booking
 import random, string
+from mangum import Mangum
 
 app = FastAPI()
+handler = Mangum(app)
+
+DATABASE_URL = "postgresql://Admin123:Aurora123@ticketingsystem.cluster-cxwiyci4eoxh.us-east-1.rds.amazonaws.com:5432/postgres"
+#"sqlite:///ticketingsystemdb"
+engine = create_engine(DATABASE_URL)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Session = SessionLocal()
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "user"
+    user_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    email = Column(String)
+    contact = Column(String)
+
+    booked_bookings = relationship("Booking", back_populates="booked_user")
+
+	
+
+class Stadium(Base):
+    __tablename__ = "stadium"
+    stadium_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String)
+    city = Column(String)
+    state = Column(String)
+    seat_capacity = Column(Integer)
+
+    matches = relationship("Match", back_populates="stadium")
+    seatings = relationship("Seating", back_populates="stadium")
+
+class Match(Base):
+    __tablename__ = "match"
+    match_id = Column(Integer, primary_key=True, index=True)
+    match_date = Column(Date)
+    match_time = Column(String)
+    match_name = Column(String)
+    stadium_id = Column(Integer, ForeignKey("stadium.stadium_id"))
+
+    stadium = relationship("Stadium", back_populates="matches")
+    booked_bookings = relationship("Booking", back_populates="booked_match")
+
+class Seating(Base):
+    __tablename__ = "seating"
+    seat_id = Column(Integer, primary_key=True, index=True)
+    stadium_id = Column(Integer, ForeignKey("stadium.stadium_id"))
+    stand_name = Column(String)
+    seat_number = Column(String)
+
+    stadium = relationship("Stadium", back_populates="seatings")
+    booked_bookings = relationship("Booking", back_populates="booked_seating")
+
+class Booking(Base):
+    __tablename__ = "booking"
+    booking_number = Column(String, primary_key=True)
+    match_id = Column(Integer, ForeignKey("match.match_id"), primary_key=True)
+    seat_id = Column(Integer, ForeignKey("seating.seat_id"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("user.user_id"))
+    created_on = Column(TIMESTAMP, default=datetime.utcnow)
+
+    booked_match = relationship("Match", back_populates="booked_bookings")
+    booked_seating = relationship("Seating", back_populates="booked_bookings")
+    booked_user = relationship("User", back_populates="booked_bookings")
+
+
+def create_tables():
+	Base.metadata.create_all(bind=engine)
+
+
 
 ############## Pydantic Models ##############
 # Pydantic models for request and response data
-class PostUser(BaseModel):
+class GetUser(BaseModel):
 	user_id: int
 
 class GetMatch(BaseModel):
@@ -29,6 +103,7 @@ class GetAvailability(BaseModel):
 class PostBooking(BaseModel):
 	match_id: int
 	seat_ids: List[int]
+	user_id: int
 
 class GetBooking(BaseModel):
 	match_id: int
@@ -49,12 +124,6 @@ def get_db():
     finally:
         db.close()
 
-
-SESSION_USER = None
-
-def get_current_user():
-    return 1
-
 def generate_booking_number(length=8):
     characters = string.ascii_uppercase + string.digits
     booking_number = ''.join(random.choice(characters) for _ in range(length))
@@ -62,13 +131,25 @@ def generate_booking_number(length=8):
 
 ###################### Routes ######################
 
-@app.post("/login_user", status_code=201)
-def post_user(seats_to_book: PostBooking , db: Session = Depends(get_db), current_user_id: int = Depends(get_current_user)):
+@app.get("/")
+async def hello():
+	return {"message":"success"}
+
+@app.get("/login_user", response_model=GetUser)
+async def get_user(db: Session = Depends(get_db)):
+	users = db.query(User.user_id).all()
+
+	user_list = []
+	for row in users:
+		user_list.append(row.user_id)
+	
+	obj = GetUser(user_id = random.randint(1, max(user_list)))
+	return obj
 
 
 # Route to get all matches
 @app.get("/matches", response_model=List[GetMatch])
-def get_matches(db: Session = Depends(get_db)):
+async def get_matches(db: Session = Depends(get_db)):
     matches = db.query(Match).all()
     
     if matches is None:
@@ -77,7 +158,7 @@ def get_matches(db: Session = Depends(get_db)):
 
 # Route to check all vacant seats
 @app.get("/availability/{match_id}", response_model=List[GetAvailability])
-def get_availability(match_id: int, db: Session = Depends(get_db)):
+async def get_availability(match_id: int, db: Session = Depends(get_db)):
     vacant_seats = (
         db.query(Seating.seat_id, Seating.stadium_id, Match.match_id, Seating.stand_name, Seating.seat_number)
         .outerjoin(Match, Match.stadium_id == Seating.stadium_id)
@@ -90,17 +171,19 @@ def get_availability(match_id: int, db: Session = Depends(get_db)):
     return vacant_seats
 
 # Route to book given vacant seats
-@app.post("/book_seats", status_code=201)
-def post_booking(seats_to_book: PostBooking , db: Session = Depends(get_db), current_user_id: int = Depends(get_current_user)):
+@app.post("/book_seats/", status_code=201)
+async def post_booking(seats_to_book: PostBooking , db: Session = Depends(get_db)):
 	match_id = seats_to_book.match_id
 	seats = seats_to_book.seat_ids
+	userid = seats_to_book.user_id
 	booking_no = generate_booking_number()
 	bookings = []
-
+	print("current_user is : ",userid)
 	for seat_id in seats:
-		booking = Booking(booking_number=booking_no, match_id=match_id, seat_id=seat_id, user_id = current_user_id)
+		booking = Booking(booking_number=booking_no, match_id=match_id, seat_id=seat_id, user_id = userid)
 		bookings.append(booking)
 
+	print(bookings)
 	try:
 		db.add_all(bookings)
 		db.commit()
@@ -111,7 +194,7 @@ def post_booking(seats_to_book: PostBooking , db: Session = Depends(get_db), cur
 
 # Route to get booked seats
 @app.get("/get_bookings", response_model=List[GetBooking])
-def get_bookings(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+async def get_bookings(user_id: int, db: Session = Depends(get_db)):
 	bookings = db.query(Booking).filter(Booking.user_id == user_id).all()
 	response = []
 	for row in bookings:
@@ -128,8 +211,4 @@ def get_bookings(user_id: int = Depends(get_current_user), db: Session = Depends
 	return response
 
 
-###################### Main ######################
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
 
