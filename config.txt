@@ -1,0 +1,1 @@
+postgresql://Admin123:Aurora123@ticketingsystem.cluster-cxwiyci4eoxh.us-east-1.rds.amazonaws.com:5432/postgres
