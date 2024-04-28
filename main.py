@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Date, TIMESTAMP, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship, Session, declarative_base
 from pydantic import BaseModel
@@ -6,12 +7,28 @@ from typing import List
 from datetime import date, datetime
 import random, string
 from mangum import Mangum
+import requests
+import re
+
 
 app = FastAPI()
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"]
+)
 handler = Mangum(app)
 
-DATABASE_URL = "postgresql://Admin123:Aurora123@ticketingsystem.cluster-cxwiyci4eoxh.us-east-1.rds.amazonaws.com:5432/postgres"
-#"sqlite:///ticketingsystemdb"
+response = requests.get("https://github.com/DeepikaVaddevalli/CCAssignment/blob/main/config.txt")
+pattern = r"postgresql://[a-zA-Z0-9\W]{1,200}/postgres"
+# Search for the pattern in the text
+matches = re.findall(pattern, response.text)
+DATABASE_URL = matches[0]
+# DATABASE_URL = "postgresql://Admin123:Aurora123@ticketingsystem.cluster-cxwiyci4eoxh.us-east-1.rds.amazonaws.com:5432/postgres"
+# DATABASE_URL = "sqlite:///ticketingsystemdb"
 engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -154,7 +171,12 @@ async def get_matches(db: Session = Depends(get_db)):
     
     if matches is None:
         raise HTTPException(status_code=404, detail="Matches not found!")
-    return matches
+	
+    match_list = []
+    for row in matches:
+        match_list.append(GetMatch(match_id = row.match_id, match_date=row.match_date, match_time = row.match_time, match_name = row.match_name, stadium_id = row.stadium_id))
+    
+    return match_list
 
 # Route to check all vacant seats
 @app.get("/availability/{match_id}", response_model=List[GetAvailability])
@@ -165,10 +187,15 @@ async def get_availability(match_id: int, db: Session = Depends(get_db)):
         .filter(Match.match_id == match_id)
         .filter(~Seating.seat_id.in_(db.query(Booking.seat_id).filter(Booking.match_id == match_id)))
     ).all()
-    
+    availability_list = []  
+
     if vacant_seats is None:
         raise HTTPException(status_code=404, detail="All seats are booked!")
-    return vacant_seats
+
+    for row in vacant_seats:
+        availability_list.append(GetAvailability(seat_id = row.seat_id,stadium_id = row.stadium_id,match_id = row.match_id,stand_name = row.stand_name,seat_number = row.seat_number))
+
+    return availability_list
 
 # Route to book given vacant seats
 @app.post("/book_seats/", status_code=201)
